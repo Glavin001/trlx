@@ -139,9 +139,10 @@ def reward_output_length(expected_length, observed_length, max_possible_length=1
     reward = np.exp(-steepness * length_diff / max_possible_length)
     # norm_reward = min(1.0, max(-1, reward))
     # final_reward = norm_reward * 2 - 1
-    scaled_reward = reward * 2 - 1
+    # scaled_reward = reward * 2 - 1
     # final_reward = max(-1, min(1, scaled_reward))
-    final_reward = clamp_reward(scaled_reward)
+    # final_reward = clamp_reward(scaled_reward)
+    final_reward = clamp_reward(reward)
     return final_reward
 
 # def reward_func_usage_nums(perc_used: float, perc_missing: float) -> float:
@@ -155,11 +156,12 @@ def reward_output_length(expected_length, observed_length, max_possible_length=1
 def reward_func_usage_nums(perc_used: float, perc_missing: float) -> float:
     used_steepness = 1
     used_reward = np.exp(used_steepness*(perc_used - 1))
-    missing_steepness = 1
-    missing_reward = np.exp(-missing_steepness*(perc_missing))
-    sub_reward = used_reward * missing_reward
-    reward = 2*sub_reward-1
-    return clamp_reward(reward)
+    # missing_steepness = 1
+    # missing_reward = np.exp(-missing_steepness*(perc_missing))
+    # sub_reward = used_reward * missing_reward
+    # reward = 2*sub_reward-1
+    # return clamp_reward(reward)
+    return clamp_reward(used_reward)
 
 def reward_func_usage_nums_text(expected: str, generated: str) -> float:
     # maximum value is 1
@@ -185,12 +187,61 @@ def pairwise_diff(expected_arr, observed_arr):
     return diff
 
 def reward_pairwise_diff(expected_arr, observed_arr):
+    if len(expected_arr) == 0:
+        return 0  # or any other default value
     diff = pairwise_diff(expected_arr, observed_arr)
     # return 1 - (diff / len(expected_arr))
-    return 2*(1 - (diff / len(expected_arr)))-1
+    # return 2*(1 - (diff / len(expected_arr)))-1
+    return (1 - (diff / len(expected_arr)))
 
 def clamp_reward(reward: float, min_reward: float = -1.0, max_reward: float = 1.0) -> float:
     return max(min_reward, min(max_reward, reward))
+
+def find_overlapping_tokens(encodings, char_range):
+    # Tokenize the text
+    # encodings = tokenizer(text, return_offsets_mapping=True, truncation=True, max_length=512)
+
+    # Get the list of tokens and their corresponding start and end positions in the original text
+    offsets = encodings.offset_mapping
+
+    # Initialize the list to store the token indices
+    token_indices = []
+
+    # Find the tokens that overlap with the given character range
+    for token_idx, (token_start, token_end) in enumerate(offsets):
+        if char_range[0] < token_end and char_range[1] > token_start:  # Check for overlap
+            token_indices.append(token_idx)  # Token indices are 0-indexed
+
+    return token_indices
+
+def get_matching_ranges(text, search):
+    all_match_indices = []
+    start = 0
+    while True:
+        match_index = text.find(search, start)
+        if match_index == -1:
+            break
+        all_match_indices.append((match_index, match_index + len(search)))
+        start = match_index + 1
+    return all_match_indices
+
+def reward_substring_matches(text: str, encodings, searches: List[str], max_reward: float) -> List[float]:
+    """
+    For each search string, find all matching ranges then find all overlapping tokens. Give max_reward for each of the overlapping tokens.
+    Return a list of rewards for each token in the text. Non-overlapping tokens get 0 reward.
+    """
+    all_match_indices = []
+    for search in searches:
+        all_match_indices += get_matching_ranges(text, search)
+    all_token_indices = []
+    for match_index in all_match_indices:
+        all_token_indices += find_overlapping_tokens(encodings, match_index)
+    # rewards = [0.0] * len(tokenizer.tokenize(text))
+    rewards = [0.0] * len(encodings['input_ids'])
+    for token_index in all_token_indices:
+        rewards[token_index] = max_reward
+    return rewards
+
 
 # def scale_reward(reward: float, min_before: float, max_before: float, min_after: float, max_after: float) -> float:
 # numpy to scale from [-1, +1] to [-0.5, +0.7]
@@ -256,9 +307,10 @@ def reward_matching_brackets_text(code: str) -> float:
     # perc_diff = diff / max_possible_length
     perc_diff = diff / total_brackets
     perc_match = 1 - perc_diff
-    return np.interp(perc_match,
-        (0, 1), 
-        (-1, 1))
+    return perc_match
+    # return np.interp(perc_match,
+    #     (0, 1), 
+    #     (-1, 1))
 
 def dense_reward_fn3(samples: List[str], prompts: List[str], outputs: List[str], tokenizer, **kwargs) -> List[List[float]]:
 
@@ -328,6 +380,82 @@ def dense_reward_fn3(samples: List[str], prompts: List[str], outputs: List[str],
         tok_scores.append(tok_score)
     return tok_scores
 
+
+def dense_reward_fn4(samples: List[str], prompts: List[str], outputs: List[str], tokenizer, **kwargs) -> List[List[float]]:
+
+    tok_scores: List[List[float]] = []
+
+    # for sample in samples:
+    for sample_index, sample in enumerate(samples):
+        code = sample.split("Function:")[1].strip()
+
+        if code.endswith(EOS_TOKEN):
+            code = code[:-len(EOS_TOKEN)]
+
+        response = outputs[sample_index]
+        
+        encodings = tokenizer(response, return_offsets_mapping=True, truncation=True, max_length=512)
+
+        toks = encodings.input_ids
+        tok_score = [0.0] * len(toks)
+
+        output = eval(sample.split("Output:")[1].strip().split("Function:")[0].strip())
+        interpreted_output = interpreter(code)
+        if interpreted_output == "ERROR":
+            # If the code is unparsable, we give it a negative reward.
+            # reward_list.append(-1)
+            tok_score[-1] = -1
+        else:
+            # if the code is parseable
+            if output == interpreted_output:
+                # if the output is correct, we give it a positive reward.
+                # reward_list.append(1)
+                tok_score[-1] = 1
+            else:
+                # if the output is incorrect, we give it a negative reward.
+                # reward_list.append(-0.5)
+                expected_code = kwargs['original_output'][sample_index]
+                generated_code = code
+
+                # reward for output length
+                expected_length = len(output)
+                observed_length = len(interpreted_output)
+                # max_possible_length = 200 # completion tokens
+                max_possible_length = max(expected_length, observed_length) # items in output array
+
+                length_reward = reward_output_length(expected_length, observed_length, max_possible_length=max_possible_length)
+                funcs_reward = reward_func_usage_nums_text(expected_code, generated_code)
+                pairwise_reward = reward_pairwise_diff(output, interpreted_output)
+                matching_brackets_reward = reward_matching_brackets_text(generated_code)
+
+                rewards = [
+                    funcs_reward,
+                    length_reward,
+                    pairwise_reward,
+                    matching_brackets_reward,
+                ]
+                weights = [0.4, 0.1, 0.3, 0.2]
+                weighted_reward = calculate_weighted_reward(rewards, weights)
+
+                last_token_reward = np.interp(weighted_reward,
+                            (-1, 1),
+                            (-0.1, 0.9))
+                tok_score[-1] = last_token_reward
+
+                # needed_func_names = count_used_func_names(expected_code)
+                # get keys of count_used_func_names(expected_code) with values > 0
+                needed_func_names = [k for k, v in count_used_func_names(expected_code).items() if v > 0]
+                dense_rewards = reward_substring_matches(response, encodings, needed_func_names, 0.1)
+
+                # add dense_rewards to tok_score
+                for i in range(len(toks)):
+                    tok_score[i] += dense_rewards[i]
+
+        tok_scores.append(tok_score)
+
+    return tok_scores
+
+
 config_path = pathlib.Path(__file__).parent.joinpath("configs/trlx_ppo_config.yml")
 with config_path.open() as f:
     default_config = yaml.safe_load(f)
@@ -350,7 +478,7 @@ def main(hparams={}):
     trainer = trlx.train(
         # reward_fn=reward_fn,
         # if use_dense then use dense_reward_fn
-        reward_fn=dense_reward_fn3 if use_dense else reward_fn,
+        reward_fn=dense_reward_fn4 if use_dense else reward_fn,
         prompts=train_prompts,
         eval_prompts=test_prompts,
         config=config,
