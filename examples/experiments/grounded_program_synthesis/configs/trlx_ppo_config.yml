@@ -1,14 +1,20 @@
 train:
   seq_length: 256
-  epochs: 10
+  # seq_length: 512
+  # epochs: 10
+  # epochs: 30
+  epochs: 30
   total_steps: 80000
   batch_size: 8
 
   checkpoint_interval: 1000000
-  eval_interval: 16
+  # eval_interval: 16
+  eval_interval: 5
 
   pipeline: "PromptPipeline"
   trainer: "AcceleratePPOTrainer"
+
+  project_name: grounded_program_synthesis
 
 model:
   model_path: "reshinthadith/codegen_350M_list_manip_5_len"
@@ -16,6 +22,7 @@ model:
 
 tokenizer:
   tokenizer_path: "reshinthadith/codegen_350M_list_manip_5_len"
+  # tokenizer_path: "Salesforce/codegen-350M-mono"
 
 optimizer:
   name: "adamw"
@@ -49,7 +56,8 @@ method:
   ref_mean: null
   ref_std: null
   gen_kwargs:
-    max_new_tokens: 256
+    # max_new_tokens: 256
+    max_new_tokens: 200
     top_k: 0
     top_p: 0.7
     do_sample: True

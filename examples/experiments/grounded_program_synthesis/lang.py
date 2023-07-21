@@ -98,8 +98,15 @@ class Interpreter:
             statement_string (str) : Statement String
         """
         try:
-            return eval(statement_string)  # Adding an exception to unparsable strings
+            res = eval(statement_string)  # Adding an exception to unparsable strings
+            # check if res is an array
+            if isinstance(res, list):
+                return res
+            else:
+                return "ERROR"
         except:
+            # except Exception as e:
+            # print(e)
             return "ERROR"
 
 
